@@ -1,4 +1,4 @@
-name: Build HotspotOS Test v3
+name: Build HotspotOS Test v4
 
 on:
   workflow_dispatch:
@@ -8,36 +8,23 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare build host
+      - name: Install host dependencies
         shell: bash
         run: |
           set -eux
 
           sudo apt-get update
 
-          # Remove conflicting old QEMU packages first
-          sudo apt-get remove -y \
-            qemu-user-static \
-            qemu-user-binfmt \
-            qemu-user \
-            qemu-user-static:armhf \
-            qemu-user-static:arm64 \
-            || true
-
-          sudo apt-get autoremove -y || true
-
-          sudo apt-get update
-
-          # Install only the current package required by pi-gen
           sudo apt-get install -y \
-            qemu-user-binfmt \
-            binfmt-support \
-            debootstrap \
+            coreutils \
             quilt \
             parted \
+            qemu-user-binfmt \
+            debootstrap \
             zerofree \
             zip \
             dosfstools \
@@ -60,62 +47,113 @@ jobs:
 
           sudo update-binfmts --enable || true
 
-          git --version
-          qemu-arm --version || true
-
       - name: Create HotspotOS custom stage
         shell: bash
         run: |
           set -eux
 
           rm -rf custom-stage
+
           mkdir -p custom-stage/01-hotspot
 
           cat > custom-stage/01-hotspot/00-run.sh <<'EOF'
-          #!/bin/bash
-          set -e
+          #!/bin/bash -e
 
-          echo "HotspotOS custom stage"
-          echo "HotspotOS installation started."
+          echo "================================="
+          echo " HotspotOS Test v4"
+          echo " Custom stage running"
+          echo "================================="
 
           mkdir -p "${ROOTFS_DIR}/etc/hotspotos"
 
-          cat > "${ROOTFS_DIR}/etc/hotspotos/version" <<'EOV'
-          HotspotOS Test v3
-          EOV
+          echo "HotspotOS Test v4" \
+            > "${ROOTFS_DIR}/etc/hotspotos/version"
           EOF
 
           chmod +x custom-stage/01-hotspot/00-run.sh
 
           touch custom-stage/EXPORT_IMAGE
 
-      - name: Build Raspberry Pi OS Lite 32-bit
-        uses: usimd/pi-gen-action@v1
-        with:
-          image-name: HotspotOS-Test-v3
-          pi-gen-version: master
-          release: trixie
-          stage-list: stage0 stage1 stage2 ./custom-stage
-          compression: zip
-          compression-level: 6
-          export-last-stage-only: true
+      - name: Download official pi-gen
+        shell: bash
+        run: |
+          set -eux
 
-          enable-cloud-init: 0
-          enable-ssh: 1
+          rm -rf pi-gen
 
-          username: admin
-          password: admin
-          disable-first-boot-user-rename: 1
+          git clone \
+            --depth 1 \
+            --branch master \
+            https://github.com/RPi-Distro/pi-gen.git \
+            pi-gen
 
-          timezone: Asia/Manila
-          wpa-country: PH
+      - name: Prepare pi-gen configuration
+        shell: bash
+        run: |
+          set -eux
 
-          verbose-output: true
+          cd pi-gen
 
-      - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+          cat > config <<'EOF'
+          IMG_NAME='HotspotOS-Test-v4'
+
+          RELEASE='trixie'
+
+          DEPLOY_COMPRESSION='zip'
+          COMPRESSION_LEVEL='6'
+
+          EXPORT_LAST_STAGE_ONLY=1
+
+          ENABLE_SSH=1
+
+          FIRST_USER_NAME='admin'
+          FIRST_USER_PASS='admin'
+
+          DISABLE_FIRST_BOOT_USER_RENAME=1
+
+          TIMEZONE_DEFAULT='Asia/Manila'
+          WPA_COUNTRY='PH'
+
+          STAGE_LIST='stage0 stage1 stage2 ../custom-stage'
+          EOF
+
+      - name: Build pi-gen
+        shell: bash
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
+        run: |
+          set -eux
+
+          cd pi-gen
+
+          chmod +x build-docker.sh
+          chmod +x build.sh
+
+          echo "================================="
+          echo " Docker platform:"
+          echo " $DOCKER_DEFAULT_PLATFORM"
+          echo "================================="
+
+          docker version
+
+          ./build-docker.sh
+
+      - name: List generated files
+        if: always()
+        shell: bash
+        run: |
+          echo "===== pi-gen deploy ====="
+
+          if [ -d pi-gen/deploy ]; then
+            ls -lah pi-gen/deploy
+          else
+            echo "No deploy directory."
+          fi
+
+      - name: Upload HotspotOS image
         if: success()
+        uses: actions/upload-artifact@v4
         with:
-          name: HotspotOS-Test-v3
+          name: HotspotOS-Test-v4
           path: pi-gen/deploy/*
           if-no-files-found: error
