@@ -1,4 +1,4 @@
-name: Build HotspotOS Test v1
+name: Build HotspotOS Test v2
 
 on:
   workflow_dispatch:
@@ -8,13 +8,110 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     steps:
+
+      # ============================================================
+      # CHECKOUT HOTSPOTOS REPOSITORY
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # ============================================================
+      # INSTALL PI-GEN BUILD DEPENDENCIES
+      # ============================================================
+      - name: Install pi-gen dependencies
+        shell: bash
+        run: |
+          set -e
+
+          sudo dpkg --add-architecture armhf
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            coreutils \
+            quilt \
+            parted \
+            qemu-user-static \
+            qemu-user-binfmt \
+            debootstrap \
+            zerofree \
+            zip \
+            dosfstools \
+            e2fsprogs \
+            libarchive-tools \
+            libcap2-bin \
+            grep \
+            rsync \
+            xz-utils \
+            file \
+            git \
+            curl \
+            bc \
+            gpg \
+            pigz \
+            xxd \
+            arch-test \
+            bmap-tools \
+            kmod \
+            binfmt-support
+
+          sudo apt-get clean
+
+          echo "======================================"
+          echo "Checking ARM architecture"
+          echo "======================================"
+
+          uname -m
+
+          echo "======================================"
+          echo "Checking armhf support"
+          echo "======================================"
+
+          arch-test armhf || true
+
+          echo "======================================"
+          echo "Checking qemu-arm"
+          echo "======================================"
+
+          command -v qemu-arm || true
+
+          echo "======================================"
+          echo "Dependencies ready"
+          echo "======================================"
+
+
+      # ============================================================
+      # DOWNLOAD OFFICIAL PI-GEN
+      # ============================================================
+      - name: Download official pi-gen
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf pi-gen
+
+          git clone --depth 1 \
+            --branch master \
+            https://github.com/RPi-Distro/pi-gen.git \
+            pi-gen
+
+          cd pi-gen
+
+          git rev-parse HEAD
+
+          echo "Official pi-gen downloaded."
+
+
+      # ============================================================
+      # CREATE HOTSPOTOS CUSTOM STAGE
+      # ============================================================
       - name: Create HotspotOS custom stage
         shell: bash
         run: |
           set -e
+
+          cd pi-gen
 
           mkdir -p custom-stage/00-hotspot-packages
           mkdir -p custom-stage/01-hotspot/files/usr/local/hotspotos
@@ -24,6 +121,10 @@ jobs:
           mkdir -p custom-stage/01-hotspot/files/etc/systemd/system
           mkdir -p custom-stage/01-hotspot/files/etc/nftables.d
 
+
+          # ========================================================
+          # HOTSPOTOS PACKAGES
+          # ========================================================
           cat > custom-stage/00-hotspot-packages/00-packages <<'EOF'
           hostapd
           dnsmasq
@@ -36,13 +137,26 @@ jobs:
           curl
           EOF
 
+
+          # ========================================================
+          # HOTSPOTOS MAIN SETUP
+          # ========================================================
           cat > custom-stage/01-hotspot/00-run.sh <<'EOF'
           #!/bin/bash
           set -e
 
+
+          # --------------------------------------------------------
+          # DIRECTORIES
+          # --------------------------------------------------------
           install -d /var/lib/hotspotos
           install -d /etc/hotspotos
+          install -d /usr/local/hotspotos
 
+
+          # --------------------------------------------------------
+          # HOTSPOTOS CONFIG
+          # --------------------------------------------------------
           cat > /etc/hotspotos/config.json <<'CONFIG'
           {
             "ssid": "HotspotOS-Test",
@@ -54,6 +168,10 @@ jobs:
           }
           CONFIG
 
+
+          # --------------------------------------------------------
+          # HOSTAPD
+          # --------------------------------------------------------
           cat > /etc/hostapd/hostapd.conf <<'EOF2'
           interface=wlan0
           driver=nl80211
@@ -70,10 +188,15 @@ jobs:
           rsn_pairwise=CCMP
           EOF2
 
+
           cat > /etc/default/hostapd <<'EOF2'
           DAEMON_CONF="/etc/hostapd/hostapd.conf"
           EOF2
 
+
+          # --------------------------------------------------------
+          # DNSMASQ
+          # --------------------------------------------------------
           cat > /etc/dnsmasq.d/hotspotos.conf <<'EOF2'
           interface=wlan0
           bind-dynamic
@@ -83,8 +206,12 @@ jobs:
           address=/#/10.10.0.1
           EOF2
 
+
+          # --------------------------------------------------------
+          # HOTSPOTOS PORTAL
+          # --------------------------------------------------------
           cat > /usr/local/hotspotos/portal.py <<'PY'
-          from flask import Flask, request, redirect
+          from flask import Flask, request
           import sqlite3
           import secrets
           import time
@@ -94,9 +221,12 @@ jobs:
 
           app = Flask(__name__)
 
+
           def database():
               os.makedirs("/var/lib/hotspotos", exist_ok=True)
+
               con = sqlite3.connect(DB)
+
               con.execute("""
                   CREATE TABLE IF NOT EXISTS tickets (
                       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,232 +239,592 @@ jobs:
                       device TEXT DEFAULT ''
                   )
               """)
+
               con.execute("""
                   CREATE TABLE IF NOT EXISTS settings (
                       key TEXT PRIMARY KEY,
                       value TEXT NOT NULL
                   )
               """)
+
               con.execute(
-                  "INSERT OR IGNORE INTO settings(key,value) VALUES('admin_password','admin')"
+                  "INSERT OR IGNORE INTO settings(key,value) "
+                  "VALUES('admin_password','admin')"
               )
+
               con.execute(
-                  "INSERT OR IGNORE INTO settings(key,value) VALUES('force_password_change','1')"
+                  "INSERT OR IGNORE INTO settings(key,value) "
+                  "VALUES('force_password_change','1')"
               )
+
               con.commit()
+
               return con
+
 
           def html(body):
               return f"""
               <!doctype html>
+
               <html>
+
               <head>
-                <meta name="viewport" content="width=device-width,initial-scale=1">
+
+                <meta
+                  name="viewport"
+                  content="width=device-width,initial-scale=1"
+                >
+
                 <title>HotspotOS</title>
+
                 <style>
-                  *{{box-sizing:border-box}}
-                  body{{margin:0;background:#101522;color:#fff;font-family:Arial,sans-serif}}
-                  .box{{max-width:430px;margin:45px auto;padding:28px;background:#1d2636;border-radius:20px}}
-                  h1{{text-align:center}}
-                  input,button{{width:100%;padding:14px;margin:7px 0;border-radius:10px;border:0}}
-                  button{{background:#168cff;color:white;font-weight:bold}}
-                  .small{{opacity:.7;text-align:center}}
-                  table{{width:100%;font-size:12px}}
-                  td,th{{padding:5px}}
-                  a{{color:#61b3ff}}
+
+                  * {{
+                    box-sizing:border-box;
+                  }}
+
+                  body {{
+                    margin:0;
+                    background:#101522;
+                    color:#fff;
+                    font-family:Arial,sans-serif;
+                  }}
+
+                  .box {{
+                    max-width:430px;
+                    margin:45px auto;
+                    padding:28px;
+                    background:#1d2636;
+                    border-radius:20px;
+                  }}
+
+                  h1 {{
+                    text-align:center;
+                  }}
+
+                  input,
+                  button {{
+                    width:100%;
+                    padding:14px;
+                    margin:7px 0;
+                    border-radius:10px;
+                    border:0;
+                  }}
+
+                  button {{
+                    background:#168cff;
+                    color:white;
+                    font-weight:bold;
+                  }}
+
+                  .small {{
+                    opacity:.7;
+                    text-align:center;
+                  }}
+
+                  table {{
+                    width:100%;
+                    font-size:12px;
+                  }}
+
+                  td,
+                  th {{
+                    padding:5px;
+                  }}
+
+                  a {{
+                    color:#61b3ff;
+                  }}
+
                 </style>
+
               </head>
+
               <body>
+
                 <div class="box">
+
                   {body}
+
                 </div>
+
               </body>
+
               </html>
               """
 
+
           @app.route("/")
           def portal():
+
               return html("""
                 <h1>📶 HotspotOS</h1>
-                <p class="small">Internet Access Portal</p>
+
+                <p class="small">
+                  Internet Access Portal
+                </p>
+
                 <form method="post" action="/login">
-                  <input name="code" placeholder="Enter Ticket Code" required autofocus>
-                  <button>CONNECT</button>
+
+                  <input
+                    name="code"
+                    placeholder="Enter Ticket Code"
+                    required
+                    autofocus
+                  >
+
+                  <button>
+                    CONNECT
+                  </button>
+
                 </form>
-                <p class="small">Enter your valid access ticket.</p>
+
+                <p class="small">
+                  Enter your valid access ticket.
+                </p>
               """)
+
 
           @app.post("/login")
           def login():
-              code = request.form.get("code","").strip().upper()
+
+              code = request.form.get(
+                  "code",
+                  ""
+              ).strip().upper()
 
               con = database()
+
               row = con.execute(
-                  "SELECT id,minutes,used FROM tickets WHERE code=?",
+                  """
+                  SELECT id,minutes,used
+                  FROM tickets
+                  WHERE code=?
+                  """,
                   (code,)
               ).fetchone()
 
               if not row:
-                  return html("<h2>❌ Invalid Ticket</h2><a href='/'>Back</a>")
+
+                  return html(
+                      "<h2>❌ Invalid Ticket</h2>"
+                      "<a href='/'>Back</a>"
+                  )
+
 
               if row[2]:
-                  return html("<h2>⚠️ Ticket Already Used</h2><a href='/'>Back</a>")
+
+                  return html(
+                      "<h2>⚠️ Ticket Already Used</h2>"
+                      "<a href='/'>Back</a>"
+                  )
+
 
               now = int(time.time())
-              expires = now + (int(row[1]) * 60)
 
-              con.execute(
-                  "UPDATE tickets SET used=1,expires=?,device=? WHERE id=?",
-                  (expires, request.remote_addr or "", row[0])
-              )
-              con.commit()
-
-              return html(f"""
-                <h2>✅ Connected</h2>
-                <p>Access time: <b>{row[1]} minutes</b></p>
-                <p>Your session has started.</p>
-              """)
-
-          @app.route("/admin", methods=["GET","POST"])
-          def admin():
-              con = database()
-
-              if request.method == "POST":
-                  password = request.form.get("password","")
-
-                  saved = con.execute(
-                      "SELECT value FROM settings WHERE key='admin_password'"
-                  ).fetchone()
-
-                  if not saved or password != saved[0]:
-                      return html("""
-                        <h2>❌ Login failed</h2>
-                        <a href="/admin">Try again</a>
-                      """)
-
-                  force = con.execute(
-                      "SELECT value FROM settings WHERE key='force_password_change'"
-                  ).fetchone()
-
-                  if force and force[0] == "1":
-                      return html("""
-                        <h2>🔐 Change Admin Password</h2>
-                        <form method="post" action="/admin/change-password">
-                          <input name="old" type="password" placeholder="Current password" required>
-                          <input name="new" type="password" placeholder="New password" required>
-                          <input name="confirm" type="password" placeholder="Confirm password" required>
-                          <button>CHANGE PASSWORD</button>
-                        </form>
-                      """)
-
-              rows = con.execute(
-                  "SELECT code,minutes,rate,used FROM tickets ORDER BY id DESC"
-              ).fetchall()
-
-              table = "".join(
-                  f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{'USED' if r[3] else 'READY'}</td></tr>"
-                  for r in rows
+              expires = now + (
+                  int(row[1]) * 60
               )
 
-              return html(f"""
-                <h1>⚙️ Admin</h1>
-
-                <form method="post" action="/admin/generate">
-                  <input name="minutes" type="number" value="60" min="1">
-                  <input name="rate" type="number" value="10" min="0">
-                  <input name="admin_password" type="password" placeholder="Admin password" required>
-                  <button>GENERATE TICKET</button>
-                </form>
-
-                <hr>
-
-                <table>
-                  <tr>
-                    <th>Code</th>
-                    <th>Min</th>
-                    <th>Rate</th>
-                    <th>Status</th>
-                  </tr>
-                  {table}
-                </table>
-              """)
-
-          @app.post("/admin/change-password")
-          def change_password():
-              con = database()
-
-              old = request.form.get("old","")
-              new = request.form.get("new","")
-              confirm = request.form.get("confirm","")
-
-              saved = con.execute(
-                  "SELECT value FROM settings WHERE key='admin_password'"
-              ).fetchone()
-
-              if not saved or old != saved[0]:
-                  return html("<h2>❌ Wrong current password</h2>")
-
-              if len(new) < 6:
-                  return html("<h2>❌ Password must be at least 6 characters</h2>")
-
-              if new != confirm:
-                  return html("<h2>❌ Passwords do not match</h2>")
-
-              con.execute(
-                  "UPDATE settings SET value=? WHERE key='admin_password'",
-                  (new,)
-              )
-              con.execute(
-                  "UPDATE settings SET value='0' WHERE key='force_password_change'"
-              )
-              con.commit()
-
-              return html("""
-                <h2>✅ Password Changed</h2>
-                <p>Your new admin password is active.</p>
-                <a href="/admin">Continue</a>
-              """)
-
-          @app.post("/admin/generate")
-          def generate():
-              con = database()
-
-              password = request.form.get("admin_password","")
-
-              saved = con.execute(
-                  "SELECT value FROM settings WHERE key='admin_password'"
-              ).fetchone()
-
-              if not saved or password != saved[0]:
-                  return html("<h2>❌ Invalid admin password</h2>")
-
-              minutes = max(1, int(request.form.get("minutes",60)))
-              rate = float(request.form.get("rate",10))
-
-              code = secrets.token_hex(3).upper()
 
               con.execute(
                   """
-                  INSERT INTO tickets(code,minutes,rate,created)
-                  VALUES(?,?,?,?)
+                  UPDATE tickets
+                  SET used=1,
+                      expires=?,
+                      device=?
+                  WHERE id=?
                   """,
-                  (code,minutes,rate,int(time.time()))
+                  (
+                      expires,
+                      request.remote_addr or "",
+                      row[0]
+                  )
               )
+
               con.commit()
 
-              return html(f"""
-                <h2>🎟️ Ticket Generated</h2>
-                <h1>{code}</h1>
-                <p>{minutes} minutes</p>
-                <p>Rate: {rate}</p>
-                <a href="/admin">Back to Admin</a>
+
+              return html(
+                  f"""
+                  <h2>✅ Connected</h2>
+
+                  <p>
+                    Access time:
+                    <b>{row[1]} minutes</b>
+                  </p>
+
+                  <p>
+                    Your session has started.
+                  </p>
+                  """
+              )
+
+
+          @app.route("/admin", methods=["GET","POST"])
+          def admin():
+
+              con = database()
+
+
+              if request.method == "POST":
+
+                  password = request.form.get(
+                      "password",
+                      ""
+                  )
+
+
+                  saved = con.execute(
+                      """
+                      SELECT value
+                      FROM settings
+                      WHERE key='admin_password'
+                      """
+                  ).fetchone()
+
+
+                  if not saved or password != saved[0]:
+
+                      return html("""
+                        <h2>❌ Login failed</h2>
+                        <a href="/admin">
+                          Try again
+                        </a>
+                      """)
+
+
+                  force = con.execute(
+                      """
+                      SELECT value
+                      FROM settings
+                      WHERE key='force_password_change'
+                      """
+                  ).fetchone()
+
+
+                  if force and force[0] == "1":
+
+                      return html("""
+                        <h2>🔐 Change Admin Password</h2>
+
+                        <form
+                          method="post"
+                          action="/admin/change-password"
+                        >
+
+                          <input
+                            name="old"
+                            type="password"
+                            placeholder="Current password"
+                            required
+                          >
+
+                          <input
+                            name="new"
+                            type="password"
+                            placeholder="New password"
+                            required
+                          >
+
+                          <input
+                            name="confirm"
+                            type="password"
+                            placeholder="Confirm password"
+                            required
+                          >
+
+                          <button>
+                            CHANGE PASSWORD
+                          </button>
+
+                        </form>
+                      """)
+
+
+              rows = con.execute(
+                  """
+                  SELECT
+                    code,
+                    minutes,
+                    rate,
+                    used
+                  FROM tickets
+                  ORDER BY id DESC
+                  """
+              ).fetchall()
+
+
+              table = "".join(
+                  f"""
+                  <tr>
+                    <td>{r[0]}</td>
+                    <td>{r[1]}</td>
+                    <td>{r[2]}</td>
+                    <td>
+                      {'USED' if r[3] else 'READY'}
+                    </td>
+                  </tr>
+                  """
+                  for r in rows
+              )
+
+
+              return html(
+                  f"""
+                  <h1>⚙️ Admin</h1>
+
+                  <form
+                    method="post"
+                    action="/admin/generate"
+                  >
+
+                    <input
+                      name="minutes"
+                      type="number"
+                      value="60"
+                      min="1"
+                    >
+
+                    <input
+                      name="rate"
+                      type="number"
+                      value="10"
+                      min="0"
+                    >
+
+                    <input
+                      name="admin_password"
+                      type="password"
+                      placeholder="Admin password"
+                      required
+                    >
+
+                    <button>
+                      GENERATE TICKET
+                    </button>
+
+                  </form>
+
+                  <hr>
+
+                  <table>
+
+                    <tr>
+                      <th>Code</th>
+                      <th>Min</th>
+                      <th>Rate</th>
+                      <th>Status</th>
+                    </tr>
+
+                    {table}
+
+                  </table>
+                  """
+              )
+
+
+          @app.post("/admin/change-password")
+          def change_password():
+
+              con = database()
+
+              old = request.form.get(
+                  "old",
+                  ""
+              )
+
+              new = request.form.get(
+                  "new",
+                  ""
+              )
+
+              confirm = request.form.get(
+                  "confirm",
+                  ""
+              )
+
+
+              saved = con.execute(
+                  """
+                  SELECT value
+                  FROM settings
+                  WHERE key='admin_password'
+                  """
+              ).fetchone()
+
+
+              if not saved or old != saved[0]:
+
+                  return html(
+                      "<h2>❌ Wrong current password</h2>"
+                  )
+
+
+              if len(new) < 6:
+
+                  return html(
+                      "<h2>"
+                      "❌ Password must be at least 6 characters"
+                      "</h2>"
+                  )
+
+
+              if new != confirm:
+
+                  return html(
+                      "<h2>"
+                      "❌ Passwords do not match"
+                      "</h2>"
+                  )
+
+
+              con.execute(
+                  """
+                  UPDATE settings
+                  SET value=?
+                  WHERE key='admin_password'
+                  """,
+                  (new,)
+              )
+
+
+              con.execute(
+                  """
+                  UPDATE settings
+                  SET value='0'
+                  WHERE key='force_password_change'
+                  """
+              )
+
+
+              con.commit()
+
+
+              return html("""
+                <h2>✅ Password Changed</h2>
+
+                <p>
+                  Your new admin password is active.
+                </p>
+
+                <a href="/admin">
+                  Continue
+                </a>
               """)
 
+
+          @app.post("/admin/generate")
+          def generate():
+
+              con = database()
+
+              password = request.form.get(
+                  "admin_password",
+                  ""
+              )
+
+
+              saved = con.execute(
+                  """
+                  SELECT value
+                  FROM settings
+                  WHERE key='admin_password'
+                  """
+              ).fetchone()
+
+
+              if not saved or password != saved[0]:
+
+                  return html(
+                      "<h2>"
+                      "❌ Invalid admin password"
+                      "</h2>"
+                  )
+
+
+              minutes = max(
+                  1,
+                  int(
+                      request.form.get(
+                          "minutes",
+                          60
+                      )
+                  )
+              )
+
+
+              rate = float(
+                  request.form.get(
+                      "rate",
+                      10
+                  )
+              )
+
+
+              code = secrets.token_hex(
+                  3
+              ).upper()
+
+
+              con.execute(
+                  """
+                  INSERT INTO tickets(
+                      code,
+                      minutes,
+                      rate,
+                      created
+                  )
+                  VALUES(?,?,?,?)
+                  """,
+                  (
+                      code,
+                      minutes,
+                      rate,
+                      int(time.time())
+                  )
+              )
+
+
+              con.commit()
+
+
+              return html(
+                  f"""
+                  <h2>🎟️ Ticket Generated</h2>
+
+                  <h1>{code}</h1>
+
+                  <p>
+                    {minutes} minutes
+                  </p>
+
+                  <p>
+                    Rate: {rate}
+                  </p>
+
+                  <a href="/admin">
+                    Back to Admin
+                  </a>
+                  """
+              )
+
+
           if __name__ == "__main__":
+
               database()
-              app.run(host="127.0.0.1", port=8080)
+
+              app.run(
+                  host="127.0.0.1",
+                  port=8080
+              )
+
           PY
 
+
+          # --------------------------------------------------------
+          # PORTAL SYSTEMD SERVICE
+          # --------------------------------------------------------
           cat > /etc/systemd/system/hotspotos-portal.service <<'EOF2'
           [Unit]
           Description=HotspotOS Captive Portal
@@ -350,6 +840,10 @@ jobs:
           WantedBy=multi-user.target
           EOF2
 
+
+          # --------------------------------------------------------
+          # NETWORK SERVICE
+          # --------------------------------------------------------
           cat > /etc/systemd/system/hotspotos-network.service <<'EOF2'
           [Unit]
           Description=HotspotOS WiFi Network
@@ -366,22 +860,44 @@ jobs:
           WantedBy=multi-user.target
           EOF2
 
+
+          # --------------------------------------------------------
+          # FIREWALL
+          # --------------------------------------------------------
           cat > /etc/nftables.d/hotspotos.nft <<'EOF2'
           table ip hotspotos_nat {
+
               chain postrouting {
+
                   type nat hook postrouting priority 100;
+
                   oifname "eth0" masquerade
+
               }
+
           }
 
+
           table ip hotspotos_filter {
+
               chain forward {
+
                   type filter hook forward priority 0;
-                  iifname "wlan0" oifname "eth0" accept
-                  iifname "eth0" oifname "wlan0" ct state established,related accept
+
+                  iifname "wlan0"
+                  oifname "eth0"
+                  accept
+
+                  iifname "eth0"
+                  oifname "wlan0"
+                  ct state established,related
+                  accept
+
               }
+
           }
           EOF2
+
 
           cat > /etc/systemd/system/hotspotos-firewall.service <<'EOF2'
           [Unit]
@@ -397,45 +913,186 @@ jobs:
           WantedBy=multi-user.target
           EOF2
 
+
+          # --------------------------------------------------------
+          # IP FORWARDING
+          # --------------------------------------------------------
           cat > /etc/sysctl.d/99-hotspotos.conf <<'EOF2'
           net.ipv4.ip_forward=1
           EOF2
 
+
+          # --------------------------------------------------------
+          # ENABLE SERVICES
+          # --------------------------------------------------------
           systemctl enable hotspotos-network.service
           systemctl enable hotspotos-firewall.service
           systemctl enable hotspotos-portal.service
+
           systemctl enable hostapd.service
           systemctl enable dnsmasq.service
 
+
           chmod +x /usr/local/hotspotos/portal.py
+
           EOF
+
 
           chmod +x custom-stage/01-hotspot/00-run.sh
 
+
+          # Export image from our custom stage
           touch custom-stage/EXPORT_IMAGE
 
-      - name: Build Raspberry Pi OS Lite 32-bit
-        uses: usimd/pi-gen-action@v1
-        with:
-          image-name: HotspotOS-Test-v1
-          pi-gen-version: master
-          stage-list: stage0 stage1 stage2 ./custom-stage
-          compression: zip
-          compression-level: 6
-          export-last-stage-only: true
-          enable-cloud-init: 0
-          enable-ssh: 1
-          username: admin
-          password: admin
-          disable-first-boot-user-rename: 1
-          timezone: Asia/Manila
-          wpa-country: PH
-          verbose-output: true
 
-      - name: Upload image artifact
+          echo "======================================"
+          echo "HotspotOS custom stage created"
+          echo "======================================"
+
+
+      # ============================================================
+      # CREATE PI-GEN CONFIG
+      # ============================================================
+      - name: Configure pi-gen
+        shell: bash
+        run: |
+          set -e
+
+          cd pi-gen
+
+          cat > config <<'EOF'
+          IMG_NAME='HotspotOS-Test-v2'
+
+          RELEASE='trixie'
+
+          ARCH='armhf'
+
+          STAGE_LIST='stage0 stage1 stage2 custom-stage'
+
+          DEPLOY_COMPRESSION='zip'
+
+          COMPRESSION_LEVEL='6'
+
+          ENABLE_CLOUD_INIT='0'
+
+          ENABLE_SSH='1'
+
+          FIRST_USER_NAME='admin'
+
+          FIRST_USER_PASS='admin'
+
+          DISABLE_FIRST_BOOT_USER_RENAME='1'
+
+          TIMEZONE_DEFAULT='Asia/Manila'
+
+          WPA_COUNTRY='PH'
+
+          LOCALE_DEFAULT='en_GB.UTF-8'
+
+          KEYBOARD_KEYMAP='gb'
+
+          KEYBOARD_LAYOUT='English (UK)'
+
+          TARGET_HOSTNAME='hotspotos'
+
+          EOF
+
+
+          echo "======================================"
+          echo "pi-gen config"
+          echo "======================================"
+
+          cat config
+
+
+      # ============================================================
+      # VERIFY PI-GEN
+      # ============================================================
+      - name: Verify pi-gen environment
+        shell: bash
+        run: |
+          set -e
+
+          cd pi-gen
+
+          echo "======================================"
+          echo "Architecture"
+          echo "======================================"
+
+          uname -m
+
+          echo "======================================"
+          echo "Target architecture"
+          echo "======================================"
+
+          grep ARCH config
+
+          echo "======================================"
+          echo "Stage list"
+          echo "======================================"
+
+          grep STAGE_LIST config
+
+          echo "======================================"
+          echo "Checking armhf"
+          echo "======================================"
+
+          if arch-test armhf; then
+            echo "armhf native/emulated execution available"
+          else
+            echo "armhf execution test failed"
+            exit 1
+          fi
+
+
+      # ============================================================
+      # BUILD HOTSPOTOS
+      # ============================================================
+      - name: Build HotspotOS Raspberry Pi OS Lite 32-bit
+        shell: bash
+        run: |
+          set -e
+
+          cd pi-gen
+
+          echo "======================================"
+          echo "STARTING HOTSPOTOS BUILD"
+          echo "======================================"
+
+          sudo ./build.sh
+
+          echo "======================================"
+          echo "BUILD FINISHED"
+          echo "======================================"
+
+
+      # ============================================================
+      # SHOW OUTPUT
+      # ============================================================
+      - name: Show build output
+        if: always()
+        shell: bash
+        run: |
+          echo "======================================"
+          echo "DEPLOY DIRECTORY"
+          echo "======================================"
+
+          sudo ls -lah pi-gen/deploy || true
+
+          echo "======================================"
+          echo "WORK DIRECTORY"
+          echo "======================================"
+
+          sudo ls -lah pi-gen/work || true
+
+
+      # ============================================================
+      # UPLOAD HOTSPOTOS IMAGE
+      # ============================================================
+      - name: Upload HotspotOS image
         uses: actions/upload-artifact@v4
         with:
-          name: HotspotOS-Test-v1
+          name: HotspotOS-Test-v2
           path: pi-gen/deploy/*
           if-no-files-found: error
           retention-days: 7
