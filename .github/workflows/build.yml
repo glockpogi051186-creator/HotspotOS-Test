@@ -418,6 +418,7 @@ jobs:
         uses: usimd/pi-gen-action@v1
         with:
           image-name: HotspotOS-Test-v1
+          pi-gen-version: master
           stage-list: stage0 stage1 stage2 ./custom-stage
           compression: zip
           compression-level: 6
