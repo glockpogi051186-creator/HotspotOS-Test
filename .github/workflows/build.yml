@@ -1,4 +1,4 @@
-name: Build HotspotOS Test v4
+name: Build HotspotOS Test v5
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install host dependencies
+      - name: Install pi-gen dependencies
         shell: bash
         run: |
           set -eux
@@ -23,7 +23,8 @@ jobs:
             coreutils \
             quilt \
             parted \
-            qemu-user-binfmt \
+            qemu-user-static \
+            binfmt-support \
             debootstrap \
             zerofree \
             zip \
@@ -43,36 +44,28 @@ jobs:
             xxd \
             arch-test \
             bmap-tools \
-            kmod
+            kmod \
+            ca-certificates
 
-          sudo update-binfmts --enable || true
-
-      - name: Create HotspotOS custom stage
+      - name: Enable ARM emulation
         shell: bash
         run: |
           set -eux
 
-          rm -rf custom-stage
+          sudo modprobe binfmt_misc || true
 
-          mkdir -p custom-stage/01-hotspot
+          sudo update-binfmts --enable || true
 
-          cat > custom-stage/01-hotspot/00-run.sh <<'EOF'
-          #!/bin/bash -e
+          echo "Checking ARM emulator..."
+          command -v qemu-arm-static
 
-          echo "================================="
-          echo " HotspotOS Test v4"
-          echo " Custom stage running"
-          echo "================================="
+          qemu-arm-static --version
 
-          mkdir -p "${ROOTFS_DIR}/etc/hotspotos"
+          echo "Checking binfmt_misc..."
+          ls -la /proc/sys/fs/binfmt_misc/ || true
 
-          echo "HotspotOS Test v4" \
-            > "${ROOTFS_DIR}/etc/hotspotos/version"
-          EOF
-
-          chmod +x custom-stage/01-hotspot/00-run.sh
-
-          touch custom-stage/EXPORT_IMAGE
+          echo "Checking ARM registration..."
+          cat /proc/sys/fs/binfmt_misc/qemu-arm || true
 
       - name: Download official pi-gen
         shell: bash
@@ -87,7 +80,36 @@ jobs:
             https://github.com/RPi-Distro/pi-gen.git \
             pi-gen
 
-      - name: Prepare pi-gen configuration
+      - name: Create HotspotOS custom stage
+        shell: bash
+        run: |
+          set -eux
+
+          rm -rf custom-stage
+
+          mkdir -p custom-stage/01-hotspot
+
+          cat > custom-stage/01-hotspot/00-run.sh <<'EOF'
+          #!/bin/bash -e
+
+          echo "======================================"
+          echo "        HotspotOS Test v5"
+          echo "        Custom Stage"
+          echo "======================================"
+
+          mkdir -p "${ROOTFS_DIR}/etc/hotspotos"
+
+          echo "HotspotOS Test v5" \
+            > "${ROOTFS_DIR}/etc/hotspotos/version"
+
+          echo "HotspotOS custom stage installed."
+          EOF
+
+          chmod +x custom-stage/01-hotspot/00-run.sh
+
+          touch custom-stage/EXPORT_IMAGE
+
+      - name: Configure pi-gen
         shell: bash
         run: |
           set -eux
@@ -95,7 +117,7 @@ jobs:
           cd pi-gen
 
           cat > config <<'EOF'
-          IMG_NAME='HotspotOS-Test-v4'
+          IMG_NAME='HotspotOS-Test-v5'
 
           RELEASE='trixie'
 
@@ -116,48 +138,45 @@ jobs:
 
           STAGE_LIST='stage0 stage1 stage2 ../custom-stage'
           EOF
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-       platforms: arm
-    
-      - name: Build pi-gen
+
+      - name: Build Raspberry Pi OS Lite 32-bit
         shell: bash
-        env:
-          DOCKER_DEFAULT_PLATFORM: linux/amd64
         run: |
           set -eux
 
           cd pi-gen
 
-          chmod +x build-docker.sh
           chmod +x build.sh
 
-          echo "================================="
-          echo " Docker platform:"
-          echo " $DOCKER_DEFAULT_PLATFORM"
-          echo "================================="
+          echo "======================================"
+          echo "       HotspotOS Test v5"
+          echo "       Native pi-gen build"
+          echo "       Raspberry Pi OS 32-bit"
+          echo "======================================"
 
-          docker version
+          uname -m
+          dpkg --print-architecture
 
-          ./build-docker.sh
+          sudo ./build.sh
 
-      - name: List generated files
+      - name: Show generated files
         if: always()
         shell: bash
         run: |
-          echo "===== pi-gen deploy ====="
+          echo "======================================"
+          echo "Generated files"
+          echo "======================================"
 
           if [ -d pi-gen/deploy ]; then
             ls -lah pi-gen/deploy
           else
-            echo "No deploy directory."
+            echo "No deploy directory found."
           fi
 
       - name: Upload HotspotOS image
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: HotspotOS-Test-v4
+          name: HotspotOS-Test-v5
           path: pi-gen/deploy/*
           if-no-files-found: error
