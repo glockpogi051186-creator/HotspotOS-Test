@@ -116,7 +116,11 @@ jobs:
 
           STAGE_LIST='stage0 stage1 stage2 ../custom-stage'
           EOF
-
+         - name: Set up QEMU
+           uses: docker/setup-qemu-action@v3
+  with:
+    platforms: arm
+    
       - name: Build pi-gen
         shell: bash
         env:
